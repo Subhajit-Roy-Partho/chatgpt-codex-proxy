@@ -28,6 +28,19 @@ const DEFAULT_ALLOWED_MODELS: &[&str] = &[
     "gpt-5.1-codex-mini",
 ];
 
+// Model suffixes that map to backend reasoning effort levels.
+// Example: gpt-5.2-xhigh -> model gpt-5.2 + reasoning.effort=xhigh
+const REASONING_SUFFIX_ALIASES: [(&str, &str); 6] = [
+    ("-extra-high", "xhigh"),
+    ("-extra_high", "xhigh"),
+    ("-xhigh", "xhigh"),
+    ("-high", "high"),
+    ("-medium", "medium"),
+    ("-low", "low"),
+];
+
+const REASONING_CANONICAL_SUFFIXES: [&str; 4] = ["-low", "-medium", "-high", "-xhigh"];
+
 fn load_allowed_models() -> Vec<String> {
     let configured = std::env::var("ALLOWED_MODELS")
         .ok()
@@ -249,6 +262,13 @@ struct ProxyServer {
     allowed_models: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+struct ResolvedModel {
+    request_model: String,
+    backend_model: String,
+    reasoning_effort: Option<String>,
+}
+
 impl ProxyServer {
     async fn new(auth_path: &str) -> Result<Self> {
         let auth_path = if auth_path.starts_with("~/") {
@@ -289,15 +309,58 @@ impl ProxyServer {
         &self.allowed_models
     }
 
-    fn is_model_allowed(&self, model: &str) -> bool {
-        self.allowed_models.iter().any(|allowed| allowed == model)
+    fn allowed_request_models(&self) -> Vec<String> {
+        let mut models = self.allowed_models.clone();
+        for base_model in &self.allowed_models {
+            for suffix in REASONING_CANONICAL_SUFFIXES {
+                models.push(format!("{base_model}{suffix}"));
+            }
+        }
+
+        let mut seen = HashSet::new();
+        models
+            .into_iter()
+            .filter(|model| seen.insert(model.clone()))
+            .collect()
+    }
+
+    fn resolve_model(&self, model: &str) -> Option<ResolvedModel> {
+        if self.allowed_models.iter().any(|allowed| allowed == model) {
+            return Some(ResolvedModel {
+                request_model: model.to_string(),
+                backend_model: model.to_string(),
+                reasoning_effort: None,
+            });
+        }
+
+        for (suffix, effort) in REASONING_SUFFIX_ALIASES {
+            if let Some(base_model) = model.strip_suffix(suffix) {
+                if self
+                    .allowed_models
+                    .iter()
+                    .any(|allowed| allowed == base_model)
+                {
+                    return Some(ResolvedModel {
+                        request_model: model.to_string(),
+                        backend_model: base_model.to_string(),
+                        reasoning_effort: Some(effort.to_string()),
+                    });
+                }
+            }
+        }
+
+        None
     }
 
     fn models_response(&self) -> Value {
-        build_models_response(self.allowed_models())
+        build_models_response(&self.allowed_request_models())
     }
 
-    fn convert_chat_to_responses(&self, chat_req: ChatCompletionsRequest) -> ResponsesApiRequest {
+    fn convert_chat_to_responses(
+        &self,
+        chat_req: ChatCompletionsRequest,
+        resolved_model: &ResolvedModel,
+    ) -> ResponsesApiRequest {
         // Convert messages to ResponseItems
         let mut input = Vec::new();
 
@@ -334,13 +397,16 @@ impl ProxyServer {
         let instructions = "You are a helpful AI assistant. Provide clear, accurate, and concise responses to user questions and requests.".to_string();
 
         ResponsesApiRequest {
-            model: chat_req.model,
+            model: resolved_model.backend_model.clone(),
             instructions,
             input,
             tools: chat_req.tools.unwrap_or_default(),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: false,
-            reasoning: None,
+            reasoning: resolved_model
+                .reasoning_effort
+                .as_ref()
+                .map(|effort| json!({ "effort": effort })),
             store: false,
             stream: true,
             include: vec![],
@@ -350,17 +416,19 @@ impl ProxyServer {
     async fn proxy_request(
         &self,
         chat_req: ChatCompletionsRequest,
+        resolved_model: ResolvedModel,
     ) -> Result<ChatCompletionsResponse> {
         println!("🔄 Processing proxy request...");
-        self.proxy_request_original(chat_req).await
+        self.proxy_request_original(chat_req, resolved_model).await
     }
 
     async fn proxy_request_original(
         &self,
         chat_req: ChatCompletionsRequest,
+        resolved_model: ResolvedModel,
     ) -> Result<ChatCompletionsResponse> {
         // Convert to Responses API format
-        let responses_req = self.convert_chat_to_responses(chat_req);
+        let responses_req = self.convert_chat_to_responses(chat_req, &resolved_model);
 
         // Build request to ChatGPT backend with browser-like headers
         let mut request_builder = self
@@ -473,7 +541,7 @@ impl ProxyServer {
             id: format!("chatcmpl-{}", Uuid::new_v4()),
             object: "chat.completion".to_string(),
             created: chrono::Utc::now().timestamp(),
-            model: responses_req.model.clone(),
+            model: resolved_model.request_model,
             choices: vec![Choice {
                 index: 0,
                 message: ChatResponseMessage {
@@ -707,12 +775,25 @@ async fn universal_request_handler(
                 }
             };
 
-            if !proxy.is_model_allowed(&chat_req.model) {
-                return Ok(json_response(
-                    warp::http::StatusCode::BAD_REQUEST,
-                    &build_model_not_allowed_response(&chat_req.model, proxy.allowed_models()),
-                ));
-            }
+            let resolved_model = match proxy.resolve_model(&chat_req.model) {
+                Some(model) => model,
+                None => {
+                    let allowed_request_models = proxy.allowed_request_models();
+                    return Ok(json_response(
+                        warp::http::StatusCode::BAD_REQUEST,
+                        &build_model_not_allowed_response(&chat_req.model, &allowed_request_models),
+                    ));
+                }
+            };
+
+            let reasoning_display = resolved_model
+                .reasoning_effort
+                .clone()
+                .unwrap_or_else(|| "none".to_string());
+            println!(
+                "   Model mapping: request='{}' -> backend='{}' (reasoning={})",
+                resolved_model.request_model, resolved_model.backend_model, reasoning_display
+            );
 
             println!("   Model: {}", chat_req.model);
             println!("   Messages: {} items", chat_req.messages.len());
@@ -733,7 +814,7 @@ async fn universal_request_handler(
             if chat_req.stream.unwrap_or(false) {
                 println!("🔄 STREAMING: CLINE requested streaming response");
 
-                match proxy.proxy_request(chat_req).await {
+                match proxy.proxy_request(chat_req, resolved_model).await {
                     Ok(response) => {
                         let chunk_id = format!("chatcmpl-{}", Uuid::new_v4());
                         let model = response.model.clone();
@@ -790,7 +871,7 @@ async fn universal_request_handler(
                     }
                 }
             } else {
-                match proxy.proxy_request(chat_req).await {
+                match proxy.proxy_request(chat_req, resolved_model).await {
                     Ok(response) => {
                         let reply = warp::reply::json(&response);
                         let reply =

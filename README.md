@@ -46,7 +46,8 @@ ngrok http 8888 --domain=your-static-domain.ngrok-free.app
 
 In VS Code CLINE settings:
 - **Base URL**: `https://your-static-domain.ngrok-free.app`
-- **Model**: Any model from your proxy allowlist (default includes `gpt-5`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`)
+- **Model**: Any base model from your proxy allowlist (default includes `gpt-5`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`)
+- **Reasoning control**: append suffixes like `-low`, `-medium`, `-high`, `-xhigh` (example: `gpt-5.2-xhigh`)
 - **API Key**: Any value (not used, but required by extension)
 
 ### 4. Test Connection
@@ -123,15 +124,76 @@ Options:
 
 The proxy enforces an allowlist for `model` values:
 
-- Default allowlist: `gpt-5,gpt-5.2,gpt-5.3-codex,gpt-5.2-codex,gpt-5.1-codex-max,gpt-5.1-codex-mini`
+- Default base-model allowlist: `gpt-5,gpt-5.2,gpt-5.3-codex,gpt-5.2-codex,gpt-5.1-codex-max,gpt-5.1-codex-mini`
 - Override with `ALLOWED_MODELS` (comma-separated list)
 - These defaults were validated against the ChatGPT Codex backend for this setup.
+
+### Model Naming And Meaning
+
+This proxy supports reasoning control by model naming convention:
+
+| Requested model pattern | Meaning in proxy/backend payload |
+|---|---|
+| `<base-model>` | Uses base model with no explicit reasoning override (`reasoning` omitted) |
+| `<base-model>-low` | Sets `reasoning.effort` to `low` |
+| `<base-model>-medium` | Sets `reasoning.effort` to `medium` |
+| `<base-model>-high` | Sets `reasoning.effort` to `high` |
+| `<base-model>-xhigh` | Sets `reasoning.effort` to `xhigh` |
+| `<base-model>-extra-high` | Alias for `xhigh` |
+| `<base-model>-extra_high` | Alias for `xhigh` |
+
+### Current Default Available Models
+
+The following request-model IDs are available by default:
+
+```text
+gpt-5
+gpt-5-low
+gpt-5-medium
+gpt-5-high
+gpt-5-xhigh
+gpt-5.2
+gpt-5.2-low
+gpt-5.2-medium
+gpt-5.2-high
+gpt-5.2-xhigh
+gpt-5.3-codex
+gpt-5.3-codex-low
+gpt-5.3-codex-medium
+gpt-5.3-codex-high
+gpt-5.3-codex-xhigh
+gpt-5.2-codex
+gpt-5.2-codex-low
+gpt-5.2-codex-medium
+gpt-5.2-codex-high
+gpt-5.2-codex-xhigh
+gpt-5.1-codex-max
+gpt-5.1-codex-max-low
+gpt-5.1-codex-max-medium
+gpt-5.1-codex-max-high
+gpt-5.1-codex-max-xhigh
+gpt-5.1-codex-mini
+gpt-5.1-codex-mini-low
+gpt-5.1-codex-mini-medium
+gpt-5.1-codex-mini-high
+gpt-5.1-codex-mini-xhigh
+```
+
+Model routing examples:
+
+- Request model `gpt-5.2-xhigh` -> backend model `gpt-5.2` with `reasoning.effort: xhigh`
+- Request model `gpt-5.3-codex-high` -> backend model `gpt-5.3-codex` with `reasoning.effort: high`
+- Request model `gpt-5.2-extra-high` -> backend model `gpt-5.2` with `reasoning.effort: xhigh`
 
 ```bash
 ALLOWED_MODELS="gpt-5,gpt-5.2,gpt-5.3-codex,gpt-5.1-codex-max" cargo run -- --port 8080
 ```
 
-`GET /models` and `GET /v1/models` return this same allowlist, and unsupported models return a `400` error.
+`GET /models` and `GET /v1/models` return base models plus canonical suffix variants (`-low`, `-medium`, `-high`, `-xhigh`).
+
+`-extra-high` and `-extra_high` aliases are accepted in requests but are not listed in `/models`.
+
+Unknown base models or unsupported suffix combinations return `400` with `model_not_allowed`.
 
 ### Authentication
 
@@ -155,7 +217,7 @@ The proxy automatically reads authentication from your Codex `auth.json` file:
 
 ### Models
 - **GET** `/models` and `/v1/models`
-- Returns the currently allowed model list
+- Returns the expanded request-model list derived from the base allowlist
 
 ### Chat Completions
 - **POST** `/v1/chat/completions`
