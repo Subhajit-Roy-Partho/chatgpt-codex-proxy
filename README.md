@@ -46,7 +46,7 @@ ngrok http 8888 --domain=your-static-domain.ngrok-free.app
 
 In VS Code CLINE settings:
 - **Base URL**: `https://your-static-domain.ngrok-free.app`
-- **Model**: Any model from your proxy allowlist (default includes `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, `gpt-4o-mini`, `o1`, `o1-mini`, `o1-pro`, `o3`, `o3-mini`, `o4-mini`, `gpt-4`)
+- **Model**: Any model from your proxy allowlist (default includes `gpt-5`, `gpt-5.2`, `gpt-5.3-codex`, `gpt-5.2-codex`)
 - **API Key**: Any value (not used, but required by extension)
 
 ### 4. Test Connection
@@ -123,11 +123,12 @@ Options:
 
 The proxy enforces an allowlist for `model` values:
 
-- Default allowlist: `gpt-5,gpt-5-mini,gpt-5-nano,gpt-4.1,gpt-4.1-mini,gpt-4.1-nano,gpt-4o,gpt-4o-mini,o1,o1-mini,o1-pro,o3,o3-mini,o4-mini,gpt-4`
+- Default allowlist: `gpt-5,gpt-5.2,gpt-5.3-codex,gpt-5.2-codex`
 - Override with `ALLOWED_MODELS` (comma-separated list)
+- These defaults were validated against the ChatGPT Codex backend for this setup.
 
 ```bash
-ALLOWED_MODELS="gpt-5,gpt-5-mini,o3" cargo run -- --port 8080
+ALLOWED_MODELS="gpt-5,gpt-5.2,gpt-5.3-codex" cargo run -- --port 8080
 ```
 
 `GET /models` and `GET /v1/models` return this same allowlist, and unsupported models return a `400` error.
