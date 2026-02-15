@@ -19,7 +19,14 @@ struct Args {
     auth_path: String,
 }
 
-const DEFAULT_ALLOWED_MODELS: &[&str] = &["gpt-5", "gpt-5.2", "gpt-5.3-codex", "gpt-5.2-codex"];
+const DEFAULT_ALLOWED_MODELS: &[&str] = &[
+    "gpt-5",
+    "gpt-5.2",
+    "gpt-5.3-codex",
+    "gpt-5.2-codex",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-codex-mini",
+];
 
 fn load_allowed_models() -> Vec<String> {
     let configured = std::env::var("ALLOWED_MODELS")
